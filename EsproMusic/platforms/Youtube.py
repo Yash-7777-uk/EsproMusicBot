@@ -12,7 +12,7 @@ from EsproMusic.utils.formatters import time_to_seconds
 from config import API_KEY
 
 # New API Configuration
-NEW_API_BASE_URL = "https://sdvytdl-3b7624f0b8a9.herokuapp.com/api"
+NEW_API_BASE_URL = "https://sdvyt-dl-53933a861e76.herokuapp.com/api"
 OLD_API_BASE_URL = "https://youtubify.me"
 
 # Choose which API to use
