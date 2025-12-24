@@ -10,14 +10,8 @@ from youtubesearchpython.__future__ import VideosSearch
 
 from EsproMusic.utils.formatters import time_to_seconds
 from config import API_KEY
-
-# New API Configuration
-NEW_API_BASE_URL = "https://sdvyt-dl-53933a861e76.herokuapp.com/api"
-OLD_API_BASE_URL = "https://youtubify.me"
-
-# Choose which API to use
-USE_NEW_API = True  # Set to True to use the new API
-API_BASE_URL = NEW_API_BASE_URL if USE_NEW_API else OLD_API_BASE_URL
+# API Configuration
+API_BASE_URL = "https://youtubify.me"
 
 # Streaming configuration
 ENABLE_STREAMING = True  # Enable streaming URLs for VC (no file size limit)
@@ -122,37 +116,13 @@ class YouTubeAPI:
         # Extract video ID
         vid = link.split("v=")[-1].split("&")[0] if "v=" in link else link.split("/")[-1].split("?")[0]
 
-        # Get video info from new API
-        video_url = None
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-                # Get video info from new API
-                if USE_NEW_API:
-                    api_url = f"{NEW_API_BASE_URL}/vidssave"
-                    params = {"link": link}
-                    response = await client.get(api_url, params=params)
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data.get("status") == 1:
-                            resources = data.get("data", {}).get("resources", [])
-                            # Find 720p video
-                            for resource in resources:
-                                if (resource.get("type") == "video" and 
-                                    resource.get("quality") == "720P"):
-                                    video_url = resource.get("download_url")
-                                    break
-                else:
-                    # Fallback to old API
-                    video_url = f"{OLD_API_BASE_URL}/download/video?video_id={vid}&mode=stream&max_res=720&api_key={API_KEY}"
-        except Exception as e:
-            print(f"Error getting video URL: {e}")
-        
-        return 1, video_url if video_url else link
+        # Return streaming URL for VC playback
+        stream_url = f"{API_BASE_URL}/download/video?video_id={vid}&mode=stream&max_res=720&api_key={API_KEY}"
+        return 1, stream_url
 
     async def stream_url(self, link: str, videoid: Union[bool, str] = None, video: bool = False) -> Optional[str]:
         """
-        Get streaming URL for VC playback using new API.
+        Get streaming URL for VC playback (no file download, no size limit).
         
         Args:
             link: YouTube URL or video ID
@@ -167,46 +137,14 @@ class YouTubeAPI:
         if "&" in link:
             link = link.split("&")[0]
 
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-                if USE_NEW_API:
-                    # Use new API
-                    api_url = f"{NEW_API_BASE_URL}/vidssave"
-                    params = {"link": link}
-                    response = await client.get(api_url, params=params)
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data.get("status") == 1:
-                            resources = data.get("data", {}).get("resources", [])
-                            
-                            if video:
-                                # Find best video quality (prefer 720P, then 360P)
-                                video_resources = [r for r in resources if r.get("type") == "video"]
-                                # Sort by quality (720P first)
-                                for quality in ["720P", "360P", "240P", "144P"]:
-                                    for resource in video_resources:
-                                        if resource.get("quality") == quality:
-                                            return resource.get("download_url")
-                            else:
-                                # Find best audio quality (prefer 256KBPS, then 128KBPS)
-                                audio_resources = [r for r in resources if r.get("type") == "audio"]
-                                for quality in ["256KBPS", "128KBPS", "48KBPS", "LOW"]:
-                                    for resource in audio_resources:
-                                        if resource.get("quality") == quality:
-                                            return resource.get("download_url")
-                else:
-                    # Fallback to old API
-                    vid = link.split("v=")[-1].split("&")[0] if "v=" in link else link.split("/")[-1].split("?")[0]
-                    if video:
-                        return f"{OLD_API_BASE_URL}/download/video?video_id={vid}&max_res=720&api_key={API_KEY}"
-                    else:
-                        return f"{OLD_API_BASE_URL}/download/audio?video_id={vid}&api_key={API_KEY}"
-                        
-        except Exception as e:
-            print(f"Error getting stream URL from API: {e}")
-        
-        return None
+        # Extract video ID
+        vid = link.split("v=")[-1].split("&")[0] if "v=" in link else link.split("/")[-1].split("?")[0]
+
+        # Build streaming URL (default redirect mode - API redirects to YouTube's URL)
+        if video:
+            return f"{API_BASE_URL}/download/video?video_id={vid}&max_res=720&api_key={API_KEY}"
+        else:
+            return f"{API_BASE_URL}/download/audio?video_id={vid}&api_key={API_KEY}"
 
     async def playlist(self, link, limit, user_id, videoid: Union[bool, str] = None):
         """Playlist support - returns list of video IDs"""
@@ -219,21 +157,13 @@ class YouTubeAPI:
         playlist_id = link.split("list=")[-1].split("&")[0] if "list=" in link else ""
 
         try:
-            if USE_NEW_API:
-                # New API doesn't have playlist support, fallback to search
-                async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=15.0)) as client:
-                    # Try to use YouTube search for playlist items
-                    search_url = f"https://www.youtube.com/playlist?list={playlist_id}"
-                    # This is a simplified approach - in production you'd need proper playlist parsing
-                    return [playlist_id]  # Simplified
-            else:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=15.0)) as client:
-                    url = f"{OLD_API_BASE_URL}/playlist"
-                    params = {"playlist_id": playlist_id, "limit": limit, "api_key": API_KEY}
-                    r = await client.get(url, params=params)
-                    if r.status_code == 200:
-                        data = r.json()
-                        return data.get("video_ids", [])
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=15.0)) as client:
+                url = f"{API_BASE_URL}/playlist"
+                params = {"playlist_id": playlist_id, "limit": limit, "api_key": API_KEY}
+                r = await client.get(url, params=params)
+                if r.status_code == 200:
+                    data = r.json()
+                    return data.get("video_ids", [])
         except Exception:
             pass
 
@@ -261,49 +191,24 @@ class YouTubeAPI:
         return track_details, vidid
 
     async def formats(self, link: str, videoid: Union[bool, str] = None):
-        """Get available formats via new API"""
+        """Get available formats via API"""
         if videoid:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
 
+        # Extract video ID
+        vid = link.split("v=")[-1].split("&")[0] if "v=" in link else link.split("/")[-1].split("?")[0]
+
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=10.0)) as client:
-                if USE_NEW_API:
-                    api_url = f"{NEW_API_BASE_URL}/vidssave"
-                    params = {"link": link}
-                    response = await client.get(api_url, params=params)
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data.get("status") == 1:
-                            resources = data.get("data", {}).get("resources", [])
-                            
-                            # Convert to format list
-                            formats_list = []
-                            for resource in resources:
-                                format_info = {
-                                    "format_id": resource.get("resource_id", ""),
-                                    "ext": resource.get("format", "").lower(),
-                                    "resolution": resource.get("quality", ""),
-                                    "filesize": resource.get("size", 0),
-                                    "type": resource.get("type", ""),
-                                    "url": resource.get("download_url", "")
-                                }
-                                formats_list.append(format_info)
-                            
-                            return formats_list, link
-                else:
-                    # Fallback to old API
-                    vid = link.split("v=")[-1].split("&")[0] if "v=" in link else link.split("/")[-1].split("?")[0]
-                    url = f"{OLD_API_BASE_URL}/formats"
-                    params = {"video_id": vid, "api_key": API_KEY}
-                    r = await client.get(url, params=params)
-                    if r.status_code == 200:
-                        data = r.json()
-                        return data.get("formats", []), link
-        except Exception as e:
-            print(f"Error getting formats: {e}")
+                url = f"{API_BASE_URL}/formats"
+                params = {"video_id": vid, "api_key": API_KEY}
+                r = await client.get(url, params=params)
+                if r.status_code == 200:
+                    data = r.json()
+                    return data.get("formats", []), link
+        except Exception:
             pass
 
         return [], link
@@ -338,7 +243,7 @@ class YouTubeAPI:
         title: Union[bool, str] = None,
     ) -> Union[str, tuple]:
         """
-        Download audio or video using new API.
+        Download audio or video using API.
         
         Returns:
             - For streaming (long videos): Returns streaming URL as string
@@ -347,144 +252,161 @@ class YouTubeAPI:
         if videoid:
             link = self.base + link
 
-        # Get video info from new API
+        # Extract video ID from link
+        vid = link.split("v=")[-1].split("&")[0] if "v=" in link else link.split("/")[-1].split("?")[0]
+
+        # Check video duration to decide streaming vs download
+        duration_seconds = 0
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-                api_url = f"{NEW_API_BASE_URL}/vidssave"
-                params = {"link": link}
-                response = await client.get(api_url, params=params)
-                
-                if response.status_code != 200:
-                    raise Exception(f"API returned {response.status_code}")
-                
-                data = response.json()
-                if data.get("status") != 1:
-                    raise Exception("API returned error status")
-                
-                video_info = data.get("data", {})
-                resources = video_info.get("resources", [])
-                video_title = video_info.get("title", "Unknown")
-                
-                # Get duration
-                duration_seconds = video_info.get("duration", 0)
-                
+                info_resp = await client.get(
+                    f"{API_BASE_URL}/info",
+                    params={"video_id": vid, "api_key": API_KEY}
+                )
+                if info_resp.status_code == 200:
+                    info_data = info_resp.json()
+                    duration_str = info_data.get("duration", "0:0")
+                    # Parse duration
+                    parts = duration_str.split(":")
+                    if len(parts) == 3:
+                        duration_seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                    elif len(parts) == 2:
+                        duration_seconds = int(parts[0]) * 60 + int(parts[1])
+                    else:
+                        duration_seconds = int(parts[0])
         except Exception as e:
-            print(f"Failed to get video info from API: {e}")
-            # Fallback to old method for duration
-            duration_seconds = 0
-            video_title = "Unknown"
-            resources = []
+            print(f"Failed to get duration: {e}")
 
         # For long videos (>20 min), return streaming URL instead of downloading
         if ENABLE_STREAMING and duration_seconds > STREAM_MODE_DURATION_THRESHOLD:
             # Return streaming URL for VC playback
-            stream_url = await self.stream_url(link, videoid, video)
-            if stream_url:
-                print(f"Using streaming URL for long video ({duration_seconds}s): {stream_url}")
-                return stream_url
+            # Use redirect mode (default) which gives YouTube's direct URL - works with FFmpeg
+            if video:
+                stream_url = f"{API_BASE_URL}/download/video?video_id={vid}&max_res=720&api_key={API_KEY}"
             else:
-                # Fallback to direct download
-                print("Stream URL not available, falling back to download")
+                stream_url = f"{API_BASE_URL}/download/audio?video_id={vid}&api_key={API_KEY}"
 
-        # For short videos, download directly
-        async def download_from_api():
-            """Download file using direct URL from API"""
+            print(f"Using streaming URL for long video ({duration_seconds}s): {stream_url}")
+            return stream_url  # Return URL directly for streaming
+
+        # For short videos, download as before
+        # Use API for downloads
+        async def api_download_audio():
+            """Download audio using the API"""
             try:
-                # Find the appropriate resource
-                download_url = None
-                resource_type = "video" if video else "audio"
-                
-                if resource_type == "video":
-                    # Prefer 720P, then 360P for video
-                    for quality in ["720P", "360P", "240P", "144P"]:
-                        for resource in resources:
-                            if (resource.get("type") == "video" and 
-                                resource.get("quality") == quality):
-                                download_url = resource.get("download_url")
-                                file_ext = resource.get("format", "mp4").lower()
-                                break
-                        if download_url:
-                            break
-                else:
-                    # Prefer 256KBPS, then 128KBPS for audio
-                    for quality in ["256KBPS", "128KBPS", "48KBPS", "LOW"]:
-                        for resource in resources:
-                            if (resource.get("type") == "audio" and 
-                                resource.get("quality") == quality):
-                                download_url = resource.get("download_url")
-                                file_ext = resource.get("format", "mp3").lower()
-                                if file_ext == "opus":
-                                    file_ext = "opus"
-                                elif file_ext == "m4a":
-                                    file_ext = "m4a"
-                                else:
-                                    file_ext = "mp3"
-                                break
-                        if download_url:
-                            break
-                
-                if not download_url:
-                    raise Exception(f"No {resource_type} resource found")
-                
-                # Sanitize filename
-                safe_title = re.sub(r'[<>:"/\\|?*]', '', video_title)[:100]
-                if songvideo or songaudio:
-                    safe_title = title if title else safe_title
-                
-                # Set file extension
-                if songvideo:
-                    file_ext = "mp4"
-                elif songaudio:
-                    file_ext = "mp3"
-                elif video:
-                    file_ext = "mp4"
-                else:
-                    file_ext = "mp3"
-                
-                filepath = f"downloads/{safe_title}.{file_ext}"
-                
-                # Download file
                 async with httpx.AsyncClient(
                     timeout=httpx.Timeout(connect=10.0, read=600.0, write=600.0, pool=10.0),
                     follow_redirects=True
                 ) as client:
-                    
-                    os.makedirs("downloads", exist_ok=True)
-                    
-                    async with client.stream("GET", download_url) as r:
+                    url = f"{API_BASE_URL}/download/audio"
+                    params = {
+                        "video_id": vid,
+                        "mode": "download",
+                        "no_redirect": "1",
+                        "api_key": API_KEY
+                    }
+
+                    # Get filename first
+                    info_resp = await client.get(f"{API_BASE_URL}/info", params={"video_id": vid, "api_key": API_KEY})
+                    if info_resp.status_code == 200:
+                        info_data = info_resp.json()
+                        file_title = info_data.get("title", vid)
+                    else:
+                        file_title = vid
+
+                    # Sanitize filename
+                    safe_title = re.sub(r'[<>:"/\\|?*]', '', file_title)[:100]
+                    filepath = f"downloads/{safe_title}.mp3"
+
+                    # Download file
+                    async with client.stream("GET", url, params=params) as r:
                         if r.status_code != 200:
-                            raise Exception(f"Download failed with status {r.status_code}")
-                        
+                            raise Exception(f"API returned {r.status_code}")
+
+                        os.makedirs("downloads", exist_ok=True)
                         with open(filepath, "wb") as f:
                             async for chunk in r.aiter_bytes(chunk_size=1024 * 128):
                                 if chunk:
                                     f.write(chunk)
-                    
+
                     return filepath
-                    
             except Exception as e:
-                print(f"Download failed: {e}")
+                print(f"API audio download failed: {e}")
                 return None
 
-        # Handle special song download cases
+        async def api_download_video():
+            """Download video using the API"""
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(connect=10.0, read=600.0, write=600.0, pool=10.0),
+                    follow_redirects=True
+                ) as client:
+                    url = f"{API_BASE_URL}/download/video"
+                    params = {
+                        "video_id": vid,
+                        "mode": "download",
+                        "no_redirect": "1",
+                        "max_res": "720",
+                        "api_key": API_KEY
+                    }
+
+                    # Get filename first
+                    info_resp = await client.get(f"{API_BASE_URL}/info", params={"video_id": vid, "api_key": API_KEY})
+                    if info_resp.status_code == 200:
+                        info_data = info_resp.json()
+                        file_title = info_data.get("title", vid)
+                    else:
+                        file_title = vid
+
+                    # Sanitize filename
+                    safe_title = re.sub(r'[<>:"/\\|?*]', '', file_title)[:100]
+                    filepath = f"downloads/{safe_title}.mp4"
+
+                    # Download file
+                    async with client.stream("GET", url, params=params) as r:
+                        if r.status_code != 200:
+                            raise Exception(f"API returned {r.status_code}")
+
+                        os.makedirs("downloads", exist_ok=True)
+                        with open(filepath, "wb") as f:
+                            async for chunk in r.aiter_bytes(chunk_size=1024 * 128):
+                                if chunk:
+                                    f.write(chunk)
+
+                    return filepath
+            except Exception as e:
+                print(f"API video download failed: {e}")
+                return None
+
+        # Handle special song download cases (custom format_id)
         if songvideo or songaudio:
-            downloaded_file = await download_from_api()
-            if downloaded_file:
-                # Ensure correct file extension
-                if songvideo and not downloaded_file.endswith('.mp4'):
-                    new_path = downloaded_file.rsplit('.', 1)[0] + '.mp4'
-                    os.rename(downloaded_file, new_path)
-                    return new_path
-                elif songaudio and not downloaded_file.endswith('.mp3'):
-                    new_path = downloaded_file.rsplit('.', 1)[0] + '.mp3'
-                    os.rename(downloaded_file, new_path)
-                    return new_path
-                return downloaded_file
+            # For custom format downloads, fall back to video/audio download
+            if songvideo:
+                downloaded_file = await api_download_video()
+                if downloaded_file:
+                    fpath = f"downloads/{title}.mp4" if title else downloaded_file
+                    if downloaded_file != fpath and os.path.exists(downloaded_file):
+                        os.rename(downloaded_file, fpath)
+                    return fpath
+            else:  # songaudio
+                downloaded_file = await api_download_audio()
+                if downloaded_file:
+                    fpath = f"downloads/{title}.mp3" if title else downloaded_file
+                    if downloaded_file != fpath and os.path.exists(downloaded_file):
+                        os.rename(downloaded_file, fpath)
+                    return fpath
             return None
 
         # Standard video or audio download
-        downloaded_file = await download_from_api()
-        if downloaded_file and os.path.exists(downloaded_file):
-            return downloaded_file, True
-        
-        return None, True
+        if video:
+            # Download video
+            downloaded_file = await api_download_video()
+            if downloaded_file and os.path.exists(downloaded_file):
+                return downloaded_file, True
+            return None, True
+        else:
+            # Download audio
+            downloaded_file = await api_download_audio()
+            if downloaded_file and os.path.exists(downloaded_file):
+                return downloaded_file, True
+            return None, True
