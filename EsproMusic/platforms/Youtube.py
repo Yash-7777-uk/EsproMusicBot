@@ -1,7 +1,6 @@
 import asyncio
 import os
 import re
-import json
 from typing import Union, Optional
 import httpx
 
@@ -13,7 +12,12 @@ from EsproMusic.utils.formatters import time_to_seconds
 from config import API_KEY
 
 # New API Configuration
-API_BASE_URL = "https://sdvyt-dl-53933a861e76.herokuapp.com/api"
+NEW_API_BASE_URL = "https://sdvytdl-3b7624f0b8a9.herokuapp.com/api"
+OLD_API_BASE_URL = "https://youtubify.me"
+
+# Choose which API to use
+USE_NEW_API = True  # Set to True to use the new API
+API_BASE_URL = NEW_API_BASE_URL if USE_NEW_API else OLD_API_BASE_URL
 
 # Streaming configuration
 ENABLE_STREAMING = True  # Enable streaming URLs for VC (no file size limit)
@@ -115,40 +119,40 @@ class YouTubeAPI:
         if "&" in link:
             link = link.split("&")[0]
 
-        # Get video stream URL from API
+        # Extract video ID
+        vid = link.split("v=")[-1].split("&")[0] if "v=" in link else link.split("/")[-1].split("?")[0]
+
+        # Get video info from new API
+        video_url = None
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-                api_url = f"{API_BASE_URL}/vidssave?link={link}"
-                response = await client.get(api_url)
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("status") == 1:
-                        resources = data.get("data", {}).get("resources", [])
-                        
-                        # Find 720P video first
-                        for resource in resources:
-                            if resource.get("type") == "video" and resource.get("quality") == "720P":
-                                return 1, resource.get("download_url")
-                        
-                        # If no 720P, find any video
-                        for resource in resources:
-                            if resource.get("type") == "video":
-                                return 1, resource.get("download_url")
-                        
-                        raise Exception("No video resources found")
-                    else:
-                        raise Exception(f"API error: Status {data.get('status')}")
+                # Get video info from new API
+                if USE_NEW_API:
+                    api_url = f"{NEW_API_BASE_URL}/vidssave"
+                    params = {"link": link}
+                    response = await client.get(api_url, params=params)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        if data.get("status") == 1:
+                            resources = data.get("data", {}).get("resources", [])
+                            # Find 720p video
+                            for resource in resources:
+                                if (resource.get("type") == "video" and 
+                                    resource.get("quality") == "720P"):
+                                    video_url = resource.get("download_url")
+                                    break
                 else:
-                    raise Exception(f"API returned {response.status_code}")
+                    # Fallback to old API
+                    video_url = f"{OLD_API_BASE_URL}/download/video?video_id={vid}&mode=stream&max_res=720&api_key={API_KEY}"
         except Exception as e:
-            print(f"API video error: {e}")
-            # Fallback to direct video link
-            vid = link.split("v=")[-1].split("&")[0] if "v=" in link else link.split("/")[-1].split("?")[0]
-            return 1, f"https://www.youtube.com/watch?v={vid}"
+            print(f"Error getting video URL: {e}")
+        
+        return 1, video_url if video_url else link
 
     async def stream_url(self, link: str, videoid: Union[bool, str] = None, video: bool = False) -> Optional[str]:
         """
-        Get streaming URL for VC playback (no file download, no size limit).
+        Get streaming URL for VC playback using new API.
         
         Args:
             link: YouTube URL or video ID
@@ -165,48 +169,44 @@ class YouTubeAPI:
 
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-                api_url = f"{API_BASE_URL}/vidssave?link={link}"
-                response = await client.get(api_url)
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("status") == 1:
-                        resources = data.get("data", {}).get("resources", [])
-                        
-                        if video:
-                            # Find 720P video first
-                            for resource in resources:
-                                if resource.get("type") == "video" and resource.get("quality") == "720P":
-                                    return resource.get("download_url")
+                if USE_NEW_API:
+                    # Use new API
+                    api_url = f"{NEW_API_BASE_URL}/vidssave"
+                    params = {"link": link}
+                    response = await client.get(api_url, params=params)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        if data.get("status") == 1:
+                            resources = data.get("data", {}).get("resources", [])
                             
-                            # If no 720P, find any video
-                            for resource in resources:
-                                if resource.get("type") == "video":
-                                    return resource.get("download_url")
-                        else:
-                            # Find best audio (largest size)
-                            audio_resources = []
-                            for resource in resources:
-                                if resource.get("type") == "audio":
-                                    audio_resources.append(resource)
-                            
-                            if audio_resources:
-                                # Sort by size (largest first)
-                                audio_resources.sort(key=lambda x: x.get("size", 0), reverse=True)
-                                return audio_resources[0].get("download_url")
-                        
-                        raise Exception("No matching resources found")
-                    else:
-                        raise Exception(f"API error: Status {data.get('status')}")
+                            if video:
+                                # Find best video quality (prefer 720P, then 360P)
+                                video_resources = [r for r in resources if r.get("type") == "video"]
+                                # Sort by quality (720P first)
+                                for quality in ["720P", "360P", "240P", "144P"]:
+                                    for resource in video_resources:
+                                        if resource.get("quality") == quality:
+                                            return resource.get("download_url")
+                            else:
+                                # Find best audio quality (prefer 256KBPS, then 128KBPS)
+                                audio_resources = [r for r in resources if r.get("type") == "audio"]
+                                for quality in ["256KBPS", "128KBPS", "48KBPS", "LOW"]:
+                                    for resource in audio_resources:
+                                        if resource.get("quality") == quality:
+                                            return resource.get("download_url")
                 else:
-                    raise Exception(f"API returned {response.status_code}")
+                    # Fallback to old API
+                    vid = link.split("v=")[-1].split("&")[0] if "v=" in link else link.split("/")[-1].split("?")[0]
+                    if video:
+                        return f"{OLD_API_BASE_URL}/download/video?video_id={vid}&max_res=720&api_key={API_KEY}"
+                    else:
+                        return f"{OLD_API_BASE_URL}/download/audio?video_id={vid}&api_key={API_KEY}"
+                        
         except Exception as e:
-            print(f"API stream_url error: {e}")
-            # Fallback
-            vid = link.split("v=")[-1].split("&")[0] if "v=" in link else link.split("/")[-1].split("?")[0]
-            if video:
-                return f"https://www.youtube.com/watch?v={vid}"
-            else:
-                return f"https://www.youtube.com/watch?v={vid}"
+            print(f"Error getting stream URL from API: {e}")
+        
+        return None
 
     async def playlist(self, link, limit, user_id, videoid: Union[bool, str] = None):
         """Playlist support - returns list of video IDs"""
@@ -218,17 +218,23 @@ class YouTubeAPI:
         # Extract playlist ID
         playlist_id = link.split("list=")[-1].split("&")[0] if "list=" in link else ""
 
-        # Note: Your API may not support playlists, so we'll use YouTube search as fallback
         try:
-            # Try to get playlist using VideosSearch
-            search = VideosSearch(link, limit=limit)
-            result = await search.next()
-            video_ids = []
-            for video in result["result"]:
-                video_ids.append(video["id"])
-            return video_ids
-        except Exception as e:
-            print(f"Playlist error: {e}")
+            if USE_NEW_API:
+                # New API doesn't have playlist support, fallback to search
+                async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=15.0)) as client:
+                    # Try to use YouTube search for playlist items
+                    search_url = f"https://www.youtube.com/playlist?list={playlist_id}"
+                    # This is a simplified approach - in production you'd need proper playlist parsing
+                    return [playlist_id]  # Simplified
+            else:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=15.0)) as client:
+                    url = f"{OLD_API_BASE_URL}/playlist"
+                    params = {"playlist_id": playlist_id, "limit": limit, "api_key": API_KEY}
+                    r = await client.get(url, params=params)
+                    if r.status_code == 200:
+                        data = r.json()
+                        return data.get("video_ids", [])
+        except Exception:
             pass
 
         return []
@@ -255,43 +261,52 @@ class YouTubeAPI:
         return track_details, vidid
 
     async def formats(self, link: str, videoid: Union[bool, str] = None):
-        """Get available formats via API"""
+        """Get available formats via new API"""
         if videoid:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
 
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-                api_url = f"{API_BASE_URL}/vidssave?link={link}"
-                response = await client.get(api_url)
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("status") == 1:
-                        resources = data.get("data", {}).get("resources", [])
-                        formats_list = []
-                        
-                        for resource in resources:
-                            format_info = {
-                                "format": f"{resource.get('quality', '')} {resource.get('format', '')}",
-                                "filesize": resource.get("size", 0),
-                                "format_id": resource.get("resource_id", ""),
-                                "ext": resource.get("format", "").lower(),
-                                "format_note": resource.get("quality", ""),
-                                "yturl": link,
-                                "type": resource.get("type", ""),
-                                "download_url": resource.get("download_url", "")
-                            }
-                            formats_list.append(format_info)
-                        
-                        return formats_list, link
-                    else:
-                        return [], link
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=10.0)) as client:
+                if USE_NEW_API:
+                    api_url = f"{NEW_API_BASE_URL}/vidssave"
+                    params = {"link": link}
+                    response = await client.get(api_url, params=params)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        if data.get("status") == 1:
+                            resources = data.get("data", {}).get("resources", [])
+                            
+                            # Convert to format list
+                            formats_list = []
+                            for resource in resources:
+                                format_info = {
+                                    "format_id": resource.get("resource_id", ""),
+                                    "ext": resource.get("format", "").lower(),
+                                    "resolution": resource.get("quality", ""),
+                                    "filesize": resource.get("size", 0),
+                                    "type": resource.get("type", ""),
+                                    "url": resource.get("download_url", "")
+                                }
+                                formats_list.append(format_info)
+                            
+                            return formats_list, link
                 else:
-                    return [], link
+                    # Fallback to old API
+                    vid = link.split("v=")[-1].split("&")[0] if "v=" in link else link.split("/")[-1].split("?")[0]
+                    url = f"{OLD_API_BASE_URL}/formats"
+                    params = {"video_id": vid, "api_key": API_KEY}
+                    r = await client.get(url, params=params)
+                    if r.status_code == 200:
+                        data = r.json()
+                        return data.get("formats", []), link
         except Exception as e:
-            print(f"API formats error: {e}")
-            return [], link
+            print(f"Error getting formats: {e}")
+            pass
+
+        return [], link
 
     async def slider(
         self,
@@ -323,7 +338,7 @@ class YouTubeAPI:
         title: Union[bool, str] = None,
     ) -> Union[str, tuple]:
         """
-        Download audio or video using API.
+        Download audio or video using new API.
         
         Returns:
             - For streaming (long videos): Returns streaming URL as string
@@ -332,218 +347,144 @@ class YouTubeAPI:
         if videoid:
             link = self.base + link
 
-        # Check video duration to decide streaming vs download
-        duration_seconds = 0
+        # Get video info from new API
         try:
-            # Get duration from YouTube search
-            results = VideosSearch(link, limit=1)
-            for result in (await results.next())["result"]:
-                duration_str = result.get("duration", "0:0")
-                if duration_str and duration_str != "None":
-                    duration_seconds = int(time_to_seconds(duration_str))
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+                api_url = f"{NEW_API_BASE_URL}/vidssave"
+                params = {"link": link}
+                response = await client.get(api_url, params=params)
+                
+                if response.status_code != 200:
+                    raise Exception(f"API returned {response.status_code}")
+                
+                data = response.json()
+                if data.get("status") != 1:
+                    raise Exception("API returned error status")
+                
+                video_info = data.get("data", {})
+                resources = video_info.get("resources", [])
+                video_title = video_info.get("title", "Unknown")
+                
+                # Get duration
+                duration_seconds = video_info.get("duration", 0)
+                
         except Exception as e:
-            print(f"Failed to get duration: {e}")
+            print(f"Failed to get video info from API: {e}")
+            # Fallback to old method for duration
+            duration_seconds = 0
+            video_title = "Unknown"
+            resources = []
 
         # For long videos (>20 min), return streaming URL instead of downloading
         if ENABLE_STREAMING and duration_seconds > STREAM_MODE_DURATION_THRESHOLD:
-            # Get streaming URL from API
-            try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-                    api_url = f"{API_BASE_URL}/vidssave?link={link}"
-                    response = await client.get(api_url)
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data.get("status") == 1:
-                            resources = data.get("data", {}).get("resources", [])
-                            
-                            if video:
-                                # Find 720P video
-                                for resource in resources:
-                                    if resource.get("type") == "video" and resource.get("quality") == "720P":
-                                        stream_url = resource.get("download_url")
-                                        break
-                                else:
-                                    # If no 720P, find any video
-                                    for resource in resources:
-                                        if resource.get("type") == "video":
-                                            stream_url = resource.get("download_url")
-                                            break
-                                    else:
-                                        stream_url = None
-                            else:
-                                # Find best audio
-                                audio_resources = []
-                                for resource in resources:
-                                    if resource.get("type") == "audio":
-                                        audio_resources.append(resource)
-                                
-                                if audio_resources:
-                                    audio_resources.sort(key=lambda x: x.get("size", 0), reverse=True)
-                                    stream_url = audio_resources[0].get("download_url")
-                                else:
-                                    stream_url = None
-                            
-                            if stream_url:
-                                print(f"Using streaming URL for long video ({duration_seconds}s): {stream_url}")
-                                return stream_url
-            except Exception as e:
-                print(f"API streaming error: {e}")
+            # Return streaming URL for VC playback
+            stream_url = await self.stream_url(link, videoid, video)
+            if stream_url:
+                print(f"Using streaming URL for long video ({duration_seconds}s): {stream_url}")
+                return stream_url
+            else:
+                # Fallback to direct download
+                print("Stream URL not available, falling back to download")
 
-        # For short videos, download from API
-        async def api_download_audio():
-            """Download audio using the API"""
+        # For short videos, download directly
+        async def download_from_api():
+            """Download file using direct URL from API"""
             try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-                    api_url = f"{API_BASE_URL}/vidssave?link={link}"
-                    response = await client.get(api_url)
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data.get("status") == 1:
-                            resources = data.get("data", {}).get("resources", [])
-                            
-                            # Find best audio (largest size)
-                            audio_resources = []
-                            for resource in resources:
-                                if resource.get("type") == "audio":
-                                    audio_resources.append(resource)
-                            
-                            if not audio_resources:
-                                raise Exception("No audio resources found")
-                            
-                            # Sort by size (largest first)
-                            audio_resources.sort(key=lambda x: x.get("size", 0), reverse=True)
-                            audio_url = audio_resources[0].get("download_url")
-                            
-                            # Download the audio file
-                            os.makedirs("downloads", exist_ok=True)
-                            
-                            # Get title for filename
-                            try:
-                                results = VideosSearch(link, limit=1)
-                                for result in (await results.next())["result"]:
-                                    file_title = result.get("title", "audio")
-                            except:
-                                file_title = "audio"
-                            
-                            # Sanitize filename
-                            safe_title = re.sub(r'[<>:"/\\|?*]', '', file_title)[:100]
-                            filepath = f"downloads/{safe_title}.mp3"
-                            
-                            # Download file
-                            async with client.stream("GET", audio_url) as r:
-                                if r.status_code != 200:
-                                    raise Exception(f"Download returned {r.status_code}")
-                                
-                                with open(filepath, "wb") as f:
-                                    async for chunk in r.aiter_bytes(chunk_size=1024 * 128):
-                                        if chunk:
-                                            f.write(chunk)
-                            
-                            return filepath
-                        else:
-                            raise Exception(f"API error: Status {data.get('status')}")
-                    else:
-                        raise Exception(f"API returned {response.status_code}")
+                # Find the appropriate resource
+                download_url = None
+                resource_type = "video" if video else "audio"
+                
+                if resource_type == "video":
+                    # Prefer 720P, then 360P for video
+                    for quality in ["720P", "360P", "240P", "144P"]:
+                        for resource in resources:
+                            if (resource.get("type") == "video" and 
+                                resource.get("quality") == quality):
+                                download_url = resource.get("download_url")
+                                file_ext = resource.get("format", "mp4").lower()
+                                break
+                        if download_url:
+                            break
+                else:
+                    # Prefer 256KBPS, then 128KBPS for audio
+                    for quality in ["256KBPS", "128KBPS", "48KBPS", "LOW"]:
+                        for resource in resources:
+                            if (resource.get("type") == "audio" and 
+                                resource.get("quality") == quality):
+                                download_url = resource.get("download_url")
+                                file_ext = resource.get("format", "mp3").lower()
+                                if file_ext == "opus":
+                                    file_ext = "opus"
+                                elif file_ext == "m4a":
+                                    file_ext = "m4a"
+                                else:
+                                    file_ext = "mp3"
+                                break
+                        if download_url:
+                            break
+                
+                if not download_url:
+                    raise Exception(f"No {resource_type} resource found")
+                
+                # Sanitize filename
+                safe_title = re.sub(r'[<>:"/\\|?*]', '', video_title)[:100]
+                if songvideo or songaudio:
+                    safe_title = title if title else safe_title
+                
+                # Set file extension
+                if songvideo:
+                    file_ext = "mp4"
+                elif songaudio:
+                    file_ext = "mp3"
+                elif video:
+                    file_ext = "mp4"
+                else:
+                    file_ext = "mp3"
+                
+                filepath = f"downloads/{safe_title}.{file_ext}"
+                
+                # Download file
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(connect=10.0, read=600.0, write=600.0, pool=10.0),
+                    follow_redirects=True
+                ) as client:
+                    
+                    os.makedirs("downloads", exist_ok=True)
+                    
+                    async with client.stream("GET", download_url) as r:
+                        if r.status_code != 200:
+                            raise Exception(f"Download failed with status {r.status_code}")
+                        
+                        with open(filepath, "wb") as f:
+                            async for chunk in r.aiter_bytes(chunk_size=1024 * 128):
+                                if chunk:
+                                    f.write(chunk)
+                    
+                    return filepath
+                    
             except Exception as e:
-                print(f"API audio download failed: {e}")
+                print(f"Download failed: {e}")
                 return None
 
-        async def api_download_video():
-            """Download video using the API"""
-            try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-                    api_url = f"{API_BASE_URL}/vidssave?link={link}"
-                    response = await client.get(api_url)
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data.get("status") == 1:
-                            resources = data.get("data", {}).get("resources", [])
-                            
-                            # Find 720P video first, then any video
-                            video_url = None
-                            for resource in resources:
-                                if resource.get("type") == "video" and resource.get("quality") == "720P":
-                                    video_url = resource.get("download_url")
-                                    break
-                            
-                            if not video_url:
-                                for resource in resources:
-                                    if resource.get("type") == "video":
-                                        video_url = resource.get("download_url")
-                                        break
-                            
-                            if not video_url:
-                                raise Exception("No video resources found")
-                            
-                            # Download the video file
-                            os.makedirs("downloads", exist_ok=True)
-                            
-                            # Get title for filename
-                            try:
-                                results = VideosSearch(link, limit=1)
-                                for result in (await results.next())["result"]:
-                                    file_title = result.get("title", "video")
-                            except:
-                                file_title = "video"
-                            
-                            # Sanitize filename
-                            safe_title = re.sub(r'[<>:"/\\|?*]', '', file_title)[:100]
-                            filepath = f"downloads/{safe_title}.mp4"
-                            
-                            # Download file
-                            async with client.stream("GET", video_url) as r:
-                                if r.status_code != 200:
-                                    raise Exception(f"Download returned {r.status_code}")
-                                
-                                with open(filepath, "wb") as f:
-                                    async for chunk in r.aiter_bytes(chunk_size=1024 * 128):
-                                        if chunk:
-                                            f.write(chunk)
-                            
-                            return filepath
-                        else:
-                            raise Exception(f"API error: Status {data.get('status')}")
-                    else:
-                        raise Exception(f"API returned {response.status_code}")
-            except Exception as e:
-                print(f"API video download failed: {e}")
-                return None
-
-        # Handle special song download cases (custom format_id)
+        # Handle special song download cases
         if songvideo or songaudio:
-            # For custom format downloads, fall back to video/audio download
-            if songvideo:
-                downloaded_file = await api_download_video()
-                if downloaded_file:
-                    if title:
-                        fpath = f"downloads/{title}.mp4"
-                        if downloaded_file != fpath and os.path.exists(downloaded_file):
-                            os.rename(downloaded_file, fpath)
-                        return fpath
-                    else:
-                        return downloaded_file
-            else:  # songaudio
-                downloaded_file = await api_download_audio()
-                if downloaded_file:
-                    if title:
-                        fpath = f"downloads/{title}.mp3"
-                        if downloaded_file != fpath and os.path.exists(downloaded_file):
-                            os.rename(downloaded_file, fpath)
-                        return fpath
-                    else:
-                        return downloaded_file
+            downloaded_file = await download_from_api()
+            if downloaded_file:
+                # Ensure correct file extension
+                if songvideo and not downloaded_file.endswith('.mp4'):
+                    new_path = downloaded_file.rsplit('.', 1)[0] + '.mp4'
+                    os.rename(downloaded_file, new_path)
+                    return new_path
+                elif songaudio and not downloaded_file.endswith('.mp3'):
+                    new_path = downloaded_file.rsplit('.', 1)[0] + '.mp3'
+                    os.rename(downloaded_file, new_path)
+                    return new_path
+                return downloaded_file
             return None
 
         # Standard video or audio download
-        if video:
-            # Download video
-            downloaded_file = await api_download_video()
-            if downloaded_file and os.path.exists(downloaded_file):
-                return downloaded_file, True
-            return None, True
-        else:
-            # Download audio
-            downloaded_file = await api_download_audio()
-            if downloaded_file and os.path.exists(downloaded_file):
-                return downloaded_file, True
-            return None, True
+        downloaded_file = await download_from_api()
+        if downloaded_file and os.path.exists(downloaded_file):
+            return downloaded_file, True
+        
+        return None, True
